@@ -366,6 +366,15 @@ public class BitcoinJobManager : BitcoinJobManagerBase<BitcoinJob>
         var nonce = submitParams[4] as string;
         var versionBits = context.VersionRollingMask.HasValue ? submitParams[5] as string : null;
 
+        // Auto-detect version rolling from proxies (e.g. MiningRigRentals) that don't send mining.configure
+        // but still include version bits in submit params
+        if(versionBits == null && poolConfig.EnableAsicBoost == true && submitParams.Length >= 6 && submitParams[5] is string vbStr && !string.IsNullOrEmpty(vbStr))
+        {
+            versionBits = vbStr;
+            if(!context.VersionRollingMask.HasValue)
+                context.VersionRollingMask = BitcoinConstants.VersionRollingPoolMask;
+        }
+
         if(string.IsNullOrEmpty(workerValue))
             throw new StratumException(StratumError.Other, "missing or invalid workername");
 

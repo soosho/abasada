@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Reactive;
 using System.Reactive.Linq;
@@ -43,6 +44,9 @@ public class BitcoinPool : PoolBase
     protected BitcoinJobManager manager;
     private BitcoinTemplate coin;
 
+    // Session cache: maps session/subscription IDs to ExtraNonce1 for session resumption (MRR proxy)
+    private readonly ConcurrentDictionary<string, string> sessionCache = new();
+
     protected virtual async Task OnSubscribeAsync(StratumConnection connection, Timestamped<JsonRpcRequest> tsRequest)
     {
         var request = tsRequest.Value;
@@ -53,15 +57,37 @@ public class BitcoinPool : PoolBase
         var context = connection.ContextAs<BitcoinWorkerContext>();
         var requestParams = request.ParamsAs<string[]>();
 
+        // Session resumption: if client sends a session ID (2nd param),
+        // use it as subscription ID to signal session acceptance (MRR proxy fix)
+        var sessionId = requestParams?.Length > 1 ? requestParams[1] : null;
+        var subscriptionId = !string.IsNullOrEmpty(sessionId) ? sessionId : connection.ConnectionId;
+
+
+
+        // Get subscriber data (ExtraNonce1 + ExtraNonce2Size)
+        var subscriberData = manager.GetSubscriberData(connection);
+
+        // Session resumption: if we have a cached ExtraNonce1 for this session, reuse it
+        if(!string.IsNullOrEmpty(sessionId) && sessionCache.TryGetValue(sessionId, out var cachedExtraNonce1))
+        {
+            context.ExtraNonce1 = cachedExtraNonce1;
+            subscriberData[0] = cachedExtraNonce1;
+
+        }
+
+        // Cache the current session for future resumption
+        sessionCache[subscriptionId] = (string) subscriberData[0];
+
         var data = new object[]
         {
             new object[]
             {
-                new object[] { BitcoinStratumMethods.SetDifficulty, connection.ConnectionId },
-                new object[] { BitcoinStratumMethods.MiningNotify, connection.ConnectionId }
+                new object[] { BitcoinStratumMethods.SetDifficulty, subscriptionId },
+                new object[] { BitcoinStratumMethods.MiningNotify, subscriptionId },
+                new object[] { "mining.set_extranonce", subscriptionId }
             }
         }
-        .Concat(manager.GetSubscriberData(connection))
+        .Concat(subscriberData)
         .ToArray();
 
         // Nicehash's stupid validator insists on "error" property present
@@ -156,6 +182,11 @@ public class BitcoinPool : PoolBase
 
                 await connection.NotifyAsync(BitcoinStratumMethods.SetDifficulty, new object[] { context.Difficulty });
             }
+
+            // Send post-auth difficulty + job to ensure proxy miners (MRR) have work after authorization
+            await connection.NotifyAsync(BitcoinStratumMethods.SetDifficulty, new object[] { context.Difficulty });
+            var minerJobParams = CreateWorkerJob(connection, true);
+            await connection.NotifyAsync(BitcoinStratumMethods.MiningNotify, minerJobParams);
         }
 
         else
@@ -487,6 +518,8 @@ public class BitcoinPool : PoolBase
 
         try
         {
+
+
             switch(request.Method)
             {
                 case BitcoinStratumMethods.Subscribe:
@@ -525,6 +558,11 @@ public class BitcoinPool : PoolBase
                     }
 
                     await connection.RespondAsync(response);
+
+                    // MRR proxy requires mining.set_extranonce notification after subscribing
+                    // This confirms the current extranonce parameters to the proxy
+                    var extraNonce2Size = BitcoinConstants.ExtranoncePlaceHolderLength - context.ExtraNonce1.Length / 2;
+                    await connection.NotifyAsync("mining.set_extranonce", new object[] { context.ExtraNonce1, extraNonce2Size });
                     break;
 
                 case BitcoinStratumMethods.GetTransactions:
