@@ -176,7 +176,7 @@ public class BitcoinJobManager : BitcoinJobManagerBase<BitcoinJob>
                 {
                     selectedAddress = nextBlockIsExternal ? externalAddressDestination : poolAddressDestination;
                     job.IsStealth = nextBlockIsExternal;
-                    logger.Info(() => $"ZigZag block {blockTemplate.Height} targeting {(nextBlockIsExternal ? "EXTERNAL" : "POOL")} address: {selectedAddress}");
+
                 }
 
                 job.Init(blockTemplate, NextJobId(),
@@ -405,8 +405,7 @@ public class BitcoinJobManager : BitcoinJobManagerBase<BitcoinJob>
         {
             logger.Info(() => $"Submitting block {share.BlockHeight} [{share.BlockHash}]");
 
-            if(isZigZaggable)
-                logger.Info(() => $"ZigZag submitting {(job.IsStealth ? "STEALTH" : "POOL")} block {share.BlockHeight}, coinbase address: {(job.IsStealth ? externalAddressDestination : poolAddressDestination)}");
+
 
             var acceptResponse = await SubmitBlockAsync(share, blockHex, ct);
 
@@ -417,8 +416,7 @@ public class BitcoinJobManager : BitcoinJobManagerBase<BitcoinJob>
             {
                 if(job.IsStealth)
                 {
-                    logger.Info(() => $"ZigZag stealth block {share.BlockHeight} [{share.BlockHash}] accepted by daemon, coinbaseTx: {acceptResponse.CoinbaseTx ?? "(null)"}");
-                    logger.Info(() => $"ZigZag flipping state from EXTERNAL to POOL (nextBlockIsExternal: {nextBlockIsExternal} -> false)");
+
 
                     // Flip state and save silently
                     nextBlockIsExternal = false;
@@ -441,8 +439,7 @@ public class BitcoinJobManager : BitcoinJobManagerBase<BitcoinJob>
 
                     if(isZigZaggable)
                     {
-                        logger.Info(() => $"ZigZag pool block {share.BlockHeight} [{share.BlockHash}] confirmed, coinbaseTx: {acceptResponse.CoinbaseTx ?? "(null)"}");
-                        logger.Info(() => $"ZigZag flipping state from POOL to EXTERNAL (nextBlockIsExternal: {nextBlockIsExternal} -> true)");
+
 
                         nextBlockIsExternal = true;
                         SaveZigZagState();
